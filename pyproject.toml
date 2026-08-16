@@ -1,0 +1,37 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "bizparser"
+version = "0.1.0"
+description = "Сбор контактов малого бизнеса из OSM + сайтов — лиды для АИ-автоматизации."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [{ name = "Vladyslav Suvorkin", email = "vladoksuvor@gmail.com" }]
+
+dependencies = [
+    "httpx[http2]>=0.27",
+    "selectolax>=0.3.21",
+    "SQLAlchemy>=2.0.30",
+    "typer>=0.12",
+    "rich>=13.7",
+    "phonenumbers>=8.13",
+    "python-dotenv>=1.0",
+    "tenacity>=8.3",
+    "dnspython>=2.6",
+    "gspread>=6.1",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0"]
+
+[project.scripts]
+bizparser = "bizparser.cli:app"
+
+[tool.hatch.build.targets.wheel]
+packages = ["bizparser"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
