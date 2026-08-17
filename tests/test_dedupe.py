@@ -134,6 +134,66 @@ def test_merge_pair_tracks_merged_ids():
     assert "way/2" in keep.merged_ids
 
 
+def test_merge_pair_recomputes_has_automation_from_merged_dict():
+    """Регрессия: keep не проверялся (automation=None, has_automation=False —
+    "смотрели, ничего не нашли"), drop нашёл букинг-виджет отдельно. После мержа
+    словарь корректно перельётся, а has_automation должен стать True, а не
+    остаться независимо скопированным False."""
+    keep = make_business(
+        osm_id="node/1", automation=None, has_automation=False, phone="+380671111111",
+    )
+    drop = make_business(
+        osm_id="node/2", automation={"booking": ["yclients"]}, has_automation=True,
+    )
+    pair = MergePair(keep=keep, drop=drop, distance_m=5.0, similarity=1.0)
+    merge_pair(pair)
+    assert keep.automation == {"booking": ["yclients"]}
+    assert keep.has_automation is True
+
+
+def test_merge_pair_has_automation_stays_false_when_no_automation_found_anywhere():
+    keep = make_business(osm_id="node/1", automation=None, has_automation=False)
+    drop = make_business(osm_id="node/2", automation=None, has_automation=False)
+    pair = MergePair(keep=keep, drop=drop, distance_m=5.0, similarity=1.0)
+    merge_pair(pair)
+    assert keep.automation is None
+    assert keep.has_automation is False
+
+
+def test_merge_pair_pairs_email_with_its_mx_verdict():
+    """Регрессия: email и email_valid переносились независимо, из-за чего
+    вердикт мог остаться привязан не к тому адресу."""
+    keep = make_business(osm_id="node/1", email=None, email_valid=None)
+    drop = make_business(osm_id="node/2", email="info@shop.ua", email_valid=True)
+    pair = MergePair(keep=keep, drop=drop, distance_m=5.0, similarity=1.0)
+    merge_pair(pair)
+    assert keep.email == "info@shop.ua"
+    assert keep.email_valid is True
+
+
+def test_merge_pair_does_not_overwrite_keeps_own_verified_email():
+    keep = make_business(osm_id="node/1", email="a@keep.ua", email_valid=False)
+    drop = make_business(osm_id="node/2", email="b@drop.ua", email_valid=True)
+    pair = MergePair(keep=keep, drop=drop, distance_m=5.0, similarity=1.0)
+    merge_pair(pair)
+    assert keep.email == "a@keep.ua"
+    assert keep.email_valid is False
+
+
+def test_merge_pair_preserves_cached_google_place_id():
+    """Регрессия: google_place_id/google_places_data терялись при мерже,
+    заставляя повторно платить за Text Search на то же место."""
+    keep = make_business(osm_id="node/1", google_place_id=None, google_places_data=None)
+    drop = make_business(
+        osm_id="node/2", google_place_id="ChIJabc123",
+        google_places_data={"displayName": "Test"},
+    )
+    pair = MergePair(keep=keep, drop=drop, distance_m=5.0, similarity=1.0)
+    merge_pair(pair)
+    assert keep.google_place_id == "ChIJabc123"
+    assert keep.google_places_data == {"displayName": "Test"}
+
+
 def test_merge_pair_merges_socials_without_overwriting():
     keep = make_business(osm_id="node/1", socials={"instagram": "https://instagram.com/a"})
     drop = make_business(osm_id="node/2", socials={"instagram": "https://instagram.com/b",

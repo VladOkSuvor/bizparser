@@ -17,11 +17,14 @@ EMAIL_RE = re.compile(r"[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,24}")
 # Короче этого номером быть не может даже без кода страны (UA: 0XX XXX XX XX)
 MIN_PHONE_DIGITS = 9
 
-# Мусорные адреса, которые встречаются в шаблонах, аналитике и заглушках
+# Мусорные адреса, которые встречаются в шаблонах, аналитике и заглушках.
+# Токены вида user@/name@/info@site/domain.com завязаны на начало строки или
+# на "@" — иначе они матчатся как подстрока внутри реальных адресов
+# (напр. "poweruser@company.com" или "info@sitewest.com.ua" раньше вырезались).
 EMAIL_BLOCKLIST = re.compile(
     r"(example[.@]|sentry\.|wixpress\.|\.png|\.jpe?g|\.gif|\.svg|\.webp|@2x|"
-    r"your(name|email)|email@|domain\.com|test@|noreply|no-reply|"
-    r"mail@mail\.|user@|name@|info@site|^admin@localhost)",
+    r"^your(name|email)@|^email@|@(your)?domain\.com|^test@|noreply|no-reply|"
+    r"^mail@mail\.|^user@|^name@|^info@site\.|^admin@localhost)",
     re.I,
 )
 
@@ -153,6 +156,8 @@ def find_contact_pages(tree: HTMLParser, base_url: str, limit: int = 3) -> list[
 
 
 def visible_text(tree: HTMLParser) -> str:
+    """Мутирует tree — вырезает script/style/noscript/svg. Вызывать последней:
+    после find_json_ld_contacts/find_socials, иначе им нечего будет читать."""
     for tag in ("script", "style", "noscript", "svg"):
         for node in tree.css(tag):
             node.decompose()

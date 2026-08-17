@@ -11,9 +11,12 @@ from __future__ import annotations
 # Базовый вес по типу заведения: кофейня почти всегда меньше клиники
 BASELINE = {
     "hairdresser": 0, "nails": 0, "tattoo": 0, "florist": 0, "photo": 0, "craft": 0,
+    "jewelry": 0,
     "beauty": 1, "cafe": 1, "bakery": 1, "bar": 1, "cleaning": 1, "pet": 1, "optician": 1,
     "repair_car": 1, "lawyer": 1, "accountant": 1, "travel": 1, "real_estate": 1,
+    "insurance": 1, "clothes": 1, "furniture": 1, "kids": 1,
     "restaurant": 2, "dentist": 2, "vet": 2, "fitness": 2, "spa": 2, "language_school": 2,
+    "driving_school": 2,
     "clinic": 3, "hotel": 3, "pharmacy": 2,
 }
 
