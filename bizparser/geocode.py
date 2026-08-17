@@ -53,7 +53,13 @@ def geocode_city(city: str, country: str | None = "Ukraine") -> Place | None:
     if resp is None:
         return None
 
-    results = resp.json()
+    try:
+        results = resp.json()
+    except ValueError:
+        # Как и Overpass, Nominatim под нагрузкой иногда отдаёт не-JSON
+        # (HTML-страницу ошибки) вместо валидного ответа.
+        log.error("Nominatim вернул не-JSON (вероятно, перегружен): %s", resp.text[:200])
+        return None
     if not results:
         log.error("Nominatim ничего не нашёл по запросу %r", city)
         return None

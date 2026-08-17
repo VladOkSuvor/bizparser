@@ -525,7 +525,16 @@ def google_places_cmd(
     ) as progress:
         task = progress.add_task("google-places", total=len(targets))
         for biz in targets:
-            result = gp.lookup(biz)
+            try:
+                result = gp.lookup(biz)
+            except Exception as exc:  # noqa: BLE001 — платный батч не должен падать целиком
+                # lookup() уже страхует парсинг JSON, но это деньги: не наша вина, если
+                # httpx/сеть кинут что-то совсем неожиданное — один лид не должен стоить
+                # прогресса по всем остальным. Аналогично enrich.py: один битый сайт/лид
+                # не роняет прогон.
+                console.print(f"[red]{biz.name}: сбой запроса ({exc}) — пропускаю[/red]")
+                progress.advance(task)
+                continue
             if gp.apply_result(result):
                 filled += 1
             progress.advance(task)
@@ -543,14 +552,22 @@ def sheets_sync() -> None:
         )
         raise typer.Exit(1)
 
-    with console.status("Забираю правки из таблицы…"):
-        pulled = gsheets.pull()
+    try:
+        with console.status("Забираю правки из таблицы…"):
+            pulled = gsheets.pull()
 
-    with session_scope() as session:
-        rows = list(session.scalars(select(Business).order_by(Business.id)))
+        with session_scope() as session:
+            rows = list(session.scalars(select(Business).order_by(Business.id)))
 
-    with console.status(f"Обновляю таблицу ({len(rows)} записей)…"):
-        pushed = gsheets.push(rows)
+        with console.status(f"Обновляю таблицу ({len(rows)} записей)…"):
+            pushed = gsheets.push(rows)
+    except Exception as exc:  # noqa: BLE001 — API Google Sheets, сеть или права могли подвести
+        # gspread кидает свои исключения (APIError и т.п.) без обёртки в sheets.py —
+        # ловим на верхнем уровне, чтобы вместо голого трейсбека пользователь увидел
+        # понятную причину. sheets-sync идемпотентна: безопасно просто повторить прогон.
+        console.print(f"[red]Синхронизация не удалась: {exc}[/red]")
+        console.print("[dim]Обычно помогает повторный запуск — операция идемпотентна.[/dim]")
+        raise typer.Exit(1)
 
     console.print(
         f"[green]Готово.[/green] Правок из таблицы: {pulled}, в таблице теперь {pushed} строк."

@@ -105,6 +105,21 @@ def _headers(field_mask: str) -> dict:
     }
 
 
+def _safe_json(resp) -> dict | None:
+    """resp.json(), но не роняет вызывающего на не-JSON ответе (перегруз/прокси/502-страница).
+
+    Критично именно здесь: result.called к этому моменту уже увеличен и отражает
+    реально потраченный (оплаченный) вызов. Если тут кинуть исключение наружу —
+    оно уйдёт из lookup() до return, apply_result()/_record_calls() для этого лида
+    не вызовутся, и потраченный вызов молча выпадет из месячного бюджета.
+    """
+    try:
+        return resp.json()
+    except ValueError:
+        log.error("Google Places вернул не-JSON: %s", resp.text[:200])
+        return None
+
+
 def lookup(biz: Business) -> LookupResult:
     """Один лид — до двух платных вызовов. Синхронно и последовательно: это не
     массовый скрапинг, а деньги под ручным потолком, гнаться за скоростью незачем.
@@ -119,10 +134,15 @@ def lookup(biz: Business) -> LookupResult:
                 headers=_headers(FIELD_MASK_ID_ONLY), json={"textQuery": query},
             )
             result.called += 1
-            places = (resp.json().get("places") or []) if resp is not None else []
+            data = _safe_json(resp) if resp is not None else None
+            places = (data or {}).get("places") or []
             if not places:
                 return result
-            result.place_id = places[0]["id"]
+            place_id = places[0].get("id")
+            if not place_id:  # схема ответа изменилась — не наша вина, но и не крах
+                log.error("Google Places: у результата поиска нет 'id': %s", places[0])
+                return result
+            result.place_id = place_id
 
         resp = request(
             client, "GET", f"{settings.google_places_url}/places/{result.place_id}",
@@ -132,7 +152,9 @@ def lookup(biz: Business) -> LookupResult:
         result.called += 1
         if resp is None:
             return result
-        data = resp.json()
+        data = _safe_json(resp)
+        if data is None:
+            return result
         result.raw = data
         result.phone = data.get("internationalPhoneNumber")
         result.address = data.get("formattedAddress")
