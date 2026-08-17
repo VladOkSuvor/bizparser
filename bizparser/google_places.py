@@ -25,7 +25,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from datetime import date
+from datetime import datetime, timezone
 
 from sqlalchemy import select
 
@@ -66,7 +66,9 @@ def needs_lookup(biz: Business) -> bool:
 
 
 def _current_period() -> str:
-    return date.today().strftime("%Y-%m")
+    # UTC, а не локальное время машины — иначе бюджетный период "плывёт" в
+    # зависимости от таймзоны, в которой запущен процесс (см. models.as_utc)
+    return datetime.now(timezone.utc).strftime("%Y-%m")
 
 
 def usage_this_month() -> int:
@@ -118,9 +120,13 @@ def lookup(biz: Business) -> LookupResult:
                 delay=settings.google_places_delay, retries=1,
                 headers=_headers(FIELD_MASK_ID_ONLY), json={"textQuery": query},
             )
+            # В бюджет считаем только реально дошедшие до Google запросы — иначе
+            # сетевой сбой сам съедает месячный лимит, ничего не купив
+            if resp is None:
+                return result
             result.called += 1
-            places = (resp.json().get("places") or []) if resp is not None else []
-            if not places:
+            places = resp.json().get("places") or []
+            if not places or not places[0].get("id"):
                 return result
             result.place_id = places[0]["id"]
 
@@ -129,9 +135,9 @@ def lookup(biz: Business) -> LookupResult:
             delay=settings.google_places_delay, retries=1,
             headers=_headers(FIELD_MASK_DETAILS),
         )
-        result.called += 1
         if resp is None:
             return result
+        result.called += 1
         data = resp.json()
         result.raw = data
         result.phone = data.get("internationalPhoneNumber")

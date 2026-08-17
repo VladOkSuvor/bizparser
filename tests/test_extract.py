@@ -63,6 +63,26 @@ def test_find_emails_filters_blocklisted_placeholder_addresses():
     assert find_emails(html) == []
 
 
+def test_find_emails_does_not_false_positive_on_substring_matches():
+    """Регрессия: user@/name@/info@site/domain.com раньше матчились как подстрока
+    где угодно в адресе, вырезая реальные бизнес-адреса (info@sitewest.com.ua,
+    poweruser@company.com, info@stroydomain.com.ua)."""
+    html = (
+        "<p>info@sitewest.com.ua poweruser@company.com "
+        "info@stroydomain.com.ua contest@company.ua</p>"
+    )
+    found = find_emails(html)
+    assert "info@sitewest.com.ua" in found
+    assert "poweruser@company.com" in found
+    assert "info@stroydomain.com.ua" in found
+    assert "contest@company.ua" in found
+
+
+def test_find_emails_still_blocks_real_placeholders():
+    html = "<p>user@example.com name@domain.com info@site.com test@mysite.ua</p>"
+    assert find_emails(html) == []
+
+
 def test_find_emails_filters_image_asset_false_positives():
     """EMAIL_RE наивно матчит что угодно с '@', блоклист должен вырезать ассеты типа @2x.png."""
     html = "<img src='avatar@2x.png'>"
@@ -165,3 +185,19 @@ def test_find_json_ld_contacts_ignores_malformed_json():
     html = '<script type="application/ld+json">{not valid json</script>'
     tree = HTMLParser(html)
     assert find_json_ld_contacts(tree) == ([], [])
+
+
+def test_visible_text_mutates_tree_so_must_run_after_json_ld_and_socials():
+    """enrich._harvest() relies on this exact order: JSON-LD/socials read the
+    <script>/<a> nodes first, then visible_text() decomposes <script> tags for
+    plain-text phone scanning. Calling visible_text() first would silently
+    empty out JSON-LD extraction on any future reordering."""
+    html = """
+    <script type="application/ld+json">
+    {"@type": "LocalBusiness", "telephone": "+380671234567"}
+    </script>
+    """
+    tree = HTMLParser(html)
+    visible_text(tree)  # mutates tree, decomposes the ld+json <script> node
+    phones, _emails = find_json_ld_contacts(tree)
+    assert phones == []  # documents the gotcha: too late, node is gone

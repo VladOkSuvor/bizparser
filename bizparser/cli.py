@@ -11,7 +11,7 @@ from rich.console import Console
 from rich.logging import RichHandler
 from rich.progress import BarColumn, Progress, SpinnerColumn, TaskProgressColumn, TextColumn
 from rich.table import Table
-from sqlalchemy import func, or_, select
+from sqlalchemy import func, or_, select, update
 
 from . import automation as auto
 from . import categories as cat
@@ -32,6 +32,7 @@ from .websearch import find_website
 
 app = typer.Typer(add_completion=False, help="Сбор контактов малого бизнеса из OSM + сайтов.")
 console = Console()
+log = logging.getLogger(__name__)
 
 
 def _setup_logging(verbose: bool) -> None:
@@ -156,11 +157,14 @@ def discover(
         return
 
     console.print(f"[bold green]Итого:[/bold green] новых {total_new}, обновлено {total_upd}")
-    _recompute_sizes()
     if not no_dedupe and total_new:
         merged = _apply_dedupe(city=city)
         if merged:
             console.print(f"[green]Схлопнуто гео-дублей: {merged}[/green]")
+    # После дедупа: до него один и тот же адрес, пришедший node+way, сам себя
+    # раздувает в branch_count (см. предупреждение в sizing.estimate)
+    if total_new or total_upd:
+        _recompute_sizes(city=city)
 
 
 def _upsert(records: list[dict]) -> tuple[int, int]:
@@ -197,15 +201,20 @@ def _upsert(records: list[dict]) -> tuple[int, int]:
     return new, updated
 
 
-def _recompute_sizes() -> None:
-    """Пересчитывает size_estimate с учётом числа точек с одинаковым названием."""
+def _recompute_sizes(city: str | None = None) -> None:
+    """Пересчитывает size_estimate с учётом числа точек с одинаковым названием.
+
+    Скоуп по городу — иначе тёзка в другом городе раздувает branch_count, и
+    каждый прогон переписывает всю базу вместо только что тронутых записей.
+    """
     with session_scope() as session:
-        counts = dict(
-            session.execute(
-                select(Business.name, func.count(Business.id)).group_by(Business.name)
-            ).all()
-        )
-        for biz in session.scalars(select(Business)):
+        counts_stmt = select(Business.name, func.count(Business.id)).group_by(Business.name)
+        rows_stmt = select(Business)
+        if city:
+            counts_stmt = counts_stmt.where(Business.city == city)
+            rows_stmt = rows_stmt.where(Business.city == city)
+        counts = dict(session.execute(counts_stmt).all())
+        for biz in session.scalars(rows_stmt):
             size, signals = estimate(biz.raw_tags, biz.category, counts.get(biz.name, 1))
             biz.size_estimate = size
             biz.size_signals = signals
@@ -284,7 +293,8 @@ def enrich(
     ),
     recheck: bool = typer.Option(False, "--recheck", help="Обходить всех, включая уже обойдённых"),
     concurrency: int = typer.Option(
-        None, "--concurrency", "-j", help=f"Параллельных сайтов (по умолчанию {settings.enrich_concurrency})"
+        None, "--concurrency", "-j", min=1,
+        help=f"Параллельных сайтов (по умолчанию {settings.enrich_concurrency})",
     ),
 ) -> None:
     """Зайти на сайты бизнесов: контакты + что у них уже стоит из автоматизации."""
@@ -309,7 +319,7 @@ def enrich(
         console.print("[yellow]Нечего обогащать под эти фильтры.[/yellow]")
         return
 
-    workers = concurrency or settings.enrich_concurrency
+    workers = concurrency if concurrency is not None else settings.enrich_concurrency
     console.print(
         f"Обхожу {len(targets)} сайтов, {workers} параллельно "
         f"(пауза {settings.site_delay}с на каждый хост отдельно)…"
@@ -459,12 +469,12 @@ def verify_emails(
     console.print(f"Проверяю домены у {len(rows)} адресов…")
     verdicts = emailcheck.check_many([r.email for r in rows])
 
-    good = 0
+    good = sum(bool(verdicts.get(row.email, False)) for row in rows)
     with session_scope() as session:
-        for row in rows:
-            valid = verdicts.get(row.email, False)
-            good += bool(valid)
-            session.get(Business, row.id).email_valid = valid
+        session.execute(
+            update(Business),
+            [{"id": row.id, "email_valid": verdicts.get(row.email, False)} for row in rows],
+        )
 
     bad = len(rows) - good
     console.print(f"[green]Живых доменов: {good}[/green], мёртвых: {bad}")
@@ -525,7 +535,12 @@ def google_places_cmd(
     ) as progress:
         task = progress.add_task("google-places", total=len(targets))
         for biz in targets:
-            result = gp.lookup(biz)
+            try:
+                result = gp.lookup(biz)
+            except Exception as exc:  # один битый ответ Google не должен ронять весь платный прогон
+                log.warning("google-places для %s (id=%d) упал: %s", biz.name, biz.id, exc)
+                progress.advance(task)
+                continue
             if gp.apply_result(result):
                 filled += 1
             progress.advance(task)
@@ -753,9 +768,13 @@ def _query(
         if with_contact:
             stmt = stmt.where(or_(Business.phone.is_not(None), Business.email.is_not(None)))
         if no_automation:
-            # Именно False, а не NULL: непроверенные — не «горячие», а «неизвестные»
+            # То же определение «горячего», что в stats()/google_places.needs_lookup():
+            # именно False, а не NULL (непроверенные — не «горячие», а «неизвестные»),
+            # и обязательно есть чем связаться — иначе это не лид, а балласт в выгрузке
             stmt = stmt.where(
-                Business.has_automation.is_(False), Business.last_verified_at.is_not(None)
+                Business.has_automation.is_(False),
+                Business.last_verified_at.is_not(None),
+                or_(Business.phone.is_not(None), Business.email.is_not(None)),
             )
         if has_automation:
             stmt = stmt.where(Business.has_automation.is_(True))

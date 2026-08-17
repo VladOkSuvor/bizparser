@@ -21,6 +21,10 @@ log = logging.getLogger(__name__)
 _last_hit: dict[str, float] = {}
 _lock = threading.Lock()
 
+# httpx оборачивает не все ошибки TLS/DNS в HTTPError (см. ahttp.py — тот же троттлинг,
+# только асинхронный, столкнулся с этим раньше)
+NETWORK_ERRORS = (httpx.HTTPError, OSError)
+
 
 def throttle(url: str, delay: float) -> None:
     """Блокирует поток, пока с последнего запроса к этому хосту не пройдёт `delay`."""
@@ -59,7 +63,7 @@ def request(
         throttle(url, delay)
         try:
             resp = client.request(method, url, **kwargs)
-        except httpx.HTTPError as exc:
+        except NETWORK_ERRORS as exc:
             log.warning("%s %s: %s (попытка %d/%d)", method, url, exc, attempt, retries)
             time.sleep(backoff)
             backoff *= 2
