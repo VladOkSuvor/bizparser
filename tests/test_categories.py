@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import pytest
 
-from bizparser.categories import BUNDLES, CATEGORIES, resolve
+from bizparser.categories import BUNDLES, CATEGORIES, prioritize, resolve
 
 
 def test_resolve_single_known_category():
@@ -38,3 +38,16 @@ def test_every_bundle_member_exists_in_categories():
     for bundle_name, members in BUNDLES.items():
         for member in members:
             assert member in CATEGORIES, f"{bundle_name} ссылается на неизвестную {member!r}"
+
+
+def test_medical_bundle_is_human_medicine_only():
+    medical = set(BUNDLES["medical"])
+    assert {"dentist", "clinic", "doctors", "lab", "rehab"} <= medical
+    # аптеки и ветеринария — другая экономика, только осознанным выбором
+    assert "pharmacy" not in medical
+    assert "vet" not in medical
+
+
+def test_prioritize_puts_medical_first():
+    selected = resolve(["cafe", "lab", "hairdresser", "dentist"])
+    assert list(prioritize(selected))[:2] == ["dentist", "lab"]

@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 from typing import Iterable, Iterator
 
-from . import chains
+from . import chains, publicsector
 from .config import settings
 from .geocode import Place
 from .http import build_client, request
@@ -14,16 +14,21 @@ log = logging.getLogger(__name__)
 
 
 def _tag_filter(spec: str) -> str:
-    """'shop=beauty][beauty=nails' -> '["shop"="beauty"]["beauty"="nails"]', 'craft=*' -> '["craft"]'."""
+    """'shop=beauty][beauty=nails' -> '["shop"="beauty"]["beauty"="nails"]', 'craft=*' -> '["craft"]'.
+
+    'k~a|b' -> '["k"~"a|b"]' — регэксп по значению: нужен для тегов со списком через
+    «;» вроде healthcare:speciality=dermatology;cosmetology, где точное = промахнётся.
+    """
     parts = []
     for chunk in spec.split("]["):
-        key, _, value = chunk.partition("=")
+        op = "~" if "~" in chunk.split("=", 1)[0] else "="
+        key, _, value = chunk.partition(op)
         key = key.strip()
         value = value.strip()
         if not value or value == "*":
             parts.append(f'["{key}"]')
         else:
-            parts.append(f'["{key}"="{value}"]')
+            parts.append(f'["{key}"{op}"{value}"]')
     return "".join(parts)
 
 
@@ -42,8 +47,13 @@ def build_query(place: Place, filters: Iterable[str], timeout: int = 180) -> str
     return f"[out:json][timeout:{timeout}];\n{header}\n(\n{body}\n);\nout center tags;"
 
 
-def fetch(query: str) -> list[dict]:
-    """Выполняет запрос. Возвращает сырые elements."""
+def fetch(query: str) -> list[dict] | None:
+    """Выполняет запрос. Возвращает сырые elements или None, если Overpass не ответил.
+
+    None ≠ []: пустой ответ — это «в городе таких мест нет», и прогон можно
+    записать как сделанный; None — сбой, и discover-all должен вернуться к этому
+    городу при следующем запуске, а не считать его обработанным.
+    """
     with build_client(timeout=max(settings.http_timeout, 200.0)) as client:
         resp = request(
             client,
@@ -53,13 +63,19 @@ def fetch(query: str) -> list[dict]:
             data={"data": query},
         )
     if resp is None:
-        return []
+        return None
     try:
-        return resp.json().get("elements", [])
+        payload = resp.json()
     except ValueError:
         # Overpass при перегрузе отдаёт HTML-страницу с ошибкой вместо JSON
         log.error("Overpass вернул не-JSON (вероятно, перегружен): %s", resp.text[:200])
-        return []
+        return None
+    # Таймаут на стороне сервера приходит как 200 + remark, а elements обрезаны
+    remark = payload.get("remark") or ""
+    if "runtime error" in remark or "timed out" in remark:
+        log.error("Overpass не досчитал запрос: %s", remark[:200])
+        return None
+    return payload.get("elements", [])
 
 
 # --- разбор элементов ------------------------------------------------------
@@ -95,10 +111,11 @@ def _address(tags: dict) -> str | None:
 
 
 def parse_elements(
-    elements: list[dict], *, category: str, city: str, skip_chains: bool = True
+    elements: list[dict], *, category: str, city: str, skip_chains: bool = True,
+    skip_public: bool = True,
 ) -> Iterator[dict]:
     """Сырые elements → плоские словари под модель Business."""
-    skipped_chains = 0
+    skipped_chains = skipped_public = 0
     for el in elements:
         tags = el.get("tags") or {}
         name = tags.get("name") or tags.get("name:uk") or tags.get("brand")
@@ -107,6 +124,10 @@ def parse_elements(
 
         if skip_chains and chains.is_big_chain(tags):
             skipped_chains += 1
+            continue
+
+        if skip_public and publicsector.is_public_facility(tags):
+            skipped_public += 1
             continue
 
         center = el.get("center") or {}
@@ -135,3 +156,5 @@ def parse_elements(
 
     if skipped_chains:
         log.info("Пропущено крупных сетей: %d", skipped_chains)
+    if skipped_public:
+        log.info("Пропущено государственных/коммунальных учреждений: %d", skipped_public)

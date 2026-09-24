@@ -42,8 +42,16 @@ def _unwrap(href: str) -> str | None:
     return href if parsed.scheme in ("http", "https") else None
 
 
+class SearchFailed(Exception):
+    """DDG не ответил или показал капчу. Это не «сайта нет» — искать надо повторить позже."""
+
+
 def find_website(name: str, city: str, extra: str = "") -> str | None:
-    """Ищет официальный сайт по названию + городу. Возвращает первый не-агрегатор."""
+    """Ищет официальный сайт по названию + городу. Возвращает первый не-агрегатор.
+
+    None — выдача честно пришла, но сайта в ней нет. Сбой запроса или бан
+    по IP — SearchFailed: это разные состояния для website_status.
+    """
     query = " ".join(part for part in (name, city, extra, "офіційний сайт") if part)
     resp = None
     with build_client() as client:
@@ -56,7 +64,10 @@ def find_website(name: str, city: str, extra: str = "") -> str | None:
             data={"q": query, "kl": "ua-uk"},
         )
     if resp is None:
-        return None
+        raise SearchFailed("нет ответа")
+    # При подозрении на бота DDG отдаёт 200 со страницей-капчей вместо выдачи
+    if "anomaly-modal" in resp.text or "challenge-form" in resp.text:
+        raise SearchFailed("капча / антибот")
 
     tree = HTMLParser(resp.text)
     for node in tree.css("a.result__a, a.result__url"):

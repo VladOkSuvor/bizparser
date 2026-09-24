@@ -9,6 +9,7 @@ from .models import Business
 
 COLUMNS = [
     "id", "name", "category", "city", "address", "phone", "email", "email_valid", "website",
+    "website_status", "contact_person", "edrpou",
     "instagram", "facebook", "telegram", "other_socials",
     "has_automation", "automation", "size_estimate",
     "contact_score", "status", "source", "osm_id", "merged_ids",
@@ -31,6 +32,9 @@ def row_dict(biz: Business) -> dict:
         "email": biz.email or "",
         "email_valid": "" if biz.email_valid is None else int(biz.email_valid),
         "website": biz.website or "",
+        "website_status": biz.website_status or "",
+        "contact_person": biz.contact_person or "",
+        "edrpou": biz.edrpou or "",
         "instagram": socials.get("instagram", ""),
         "facebook": socials.get("facebook", ""),
         "telegram": socials.get("telegram", ""),

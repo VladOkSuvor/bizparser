@@ -15,6 +15,7 @@ BASELINE = {
     "repair_car": 1, "lawyer": 1, "accountant": 1, "travel": 1, "real_estate": 1,
     "restaurant": 2, "dentist": 2, "vet": 2, "fitness": 2, "spa": 2, "language_school": 2,
     "clinic": 3, "hotel": 3, "pharmacy": 2,
+    "doctors": 0, "cosmetology": 1, "lab": 2, "rehab": 2, "hospital": 3,
 }
 
 CHAIN_TAGS = ("brand", "brand:wikidata", "operator", "operator:wikidata")

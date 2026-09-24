@@ -6,3 +6,4 @@ __pycache__/
 leads.csv
 leads.json
 service_account.json
+data_cache/

@@ -164,18 +164,18 @@ def tel_links(html: str) -> list[str]:
     return [unquote(raw) for raw in re.findall(r'tel:([^"\'\s>]+)', html, re.I)]
 
 
-def _ld_nodes(data: object) -> Iterator[dict]:
+def ld_nodes(data: object) -> Iterator[dict]:
     """Разворачивает JSON-LD: объект, массив объектов или {"@graph": [...]}."""
     if isinstance(data, dict):
         graph = data.get("@graph")
         if isinstance(graph, list):
             for node in graph:
-                yield from _ld_nodes(node)
+                yield from ld_nodes(node)
         else:
             yield data
     elif isinstance(data, list):
         for item in data:
-            yield from _ld_nodes(item)
+            yield from ld_nodes(item)
 
 
 def _as_list(value: object) -> list:
@@ -196,7 +196,7 @@ def find_json_ld_contacts(tree: HTMLParser) -> tuple[list[str], list[str]]:
             data = json.loads(node.text(strip=True))
         except (json.JSONDecodeError, ValueError, TypeError):
             continue
-        for item in _ld_nodes(data):
+        for item in ld_nodes(data):
             if not isinstance(item, dict):
                 continue
             for raw_phone in _as_list(item.get("telephone")):

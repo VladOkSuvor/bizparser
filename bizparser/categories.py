@@ -13,10 +13,20 @@ CATEGORIES: dict[str, list[str]] = {
     "beauty": ['shop=beauty', 'shop=cosmetics', 'shop=massage'],
     "nails": ['shop=beauty][beauty=nails'],
     "tattoo": ['shop=tattoo'],
+    # мед — приоритетная вертикаль (см. MEDICAL_PRIORITY ниже)
     "dentist": ['amenity=dentist', 'healthcare=dentist'],
-    "clinic": ['amenity=clinic', 'amenity=doctors', 'healthcare=centre'],
+    "clinic": ['amenity=clinic', 'healthcare=clinic', 'healthcare=centre'],
+    # частные кабинеты: гинеколог, педиатр, семейный врач — часто ФОП без сайта
+    "doctors": ['amenity=doctors', 'healthcare=doctor'],
+    "lab": ['healthcare=laboratory', 'healthcare=sample_collection'],
+    "rehab": ['healthcare=rehabilitation', 'healthcare=physiotherapist'],
+    # косметология как мед. услуга (дерматолог/косметолог), а не салон красоты
+    "cosmetology": ['healthcare:speciality~cosmetology|dermatology|aesthetic'],
+    # больницы в OSM — в основном коммунальные; частные отбирает publicsector.py
+    "hospital": ['amenity=hospital', 'healthcare=hospital'],
     "vet": ['amenity=veterinary'],
-    "pharmacy": ['amenity=pharmacy'],
+    # аптеки — другая экономика и другой ЛПР, поэтому не в бандле medical, а отдельно
+    "pharmacy": ['amenity=pharmacy', 'healthcare=pharmacy'],
     "fitness": ['leisure=fitness_centre', 'leisure=sports_centre'],
     "spa": ['leisure=spa', 'amenity=spa'],
     # услуги
@@ -51,10 +61,24 @@ CATEGORIES: dict[str, list[str]] = {
 # Наборы, которые логично гонять пачкой
 BUNDLES: dict[str, list[str]] = {
     "beauty_all": ["hairdresser", "beauty", "nails", "tattoo", "spa"],
-    "medical": ["dentist", "clinic", "vet"],
+    # медицина для людей; vet и pharmacy — отдельно, осознанным выбором
+    "medical": ["dentist", "clinic", "doctors", "lab", "rehab", "cosmetology", "hospital"],
     "horeca": ["cafe", "restaurant", "bar", "bakery"],
     "services": ["real_estate", "lawyer", "accountant", "travel", "photo", "cleaning"],
 }
+
+
+# Порядок обхода: мед первым, остальное — по остаточному принципу
+MEDICAL_PRIORITY: tuple[str, ...] = tuple(BUNDLES["medical"])
+# Категории, к которым применяется фильтр государственных/коммунальных учреждений
+HEALTHCARE_CATEGORIES = frozenset(MEDICAL_PRIORITY) | {"pharmacy"}
+
+
+def prioritize(selected: dict[str, list[str]]) -> dict[str, list[str]]:
+    """Мед-категории вперёд (в порядке MEDICAL_PRIORITY), остальные — как были."""
+    rank = {name: i for i, name in enumerate(MEDICAL_PRIORITY)}
+    ordered = sorted(selected, key=lambda n: rank.get(n, len(rank)))
+    return {name: selected[name] for name in ordered}
 
 
 def resolve(names: list[str]) -> dict[str, list[str]]:

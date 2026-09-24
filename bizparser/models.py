@@ -5,9 +5,9 @@ from __future__ import annotations
 from datetime import datetime, timezone
 
 from sqlalchemy import (
-    JSON, Boolean, DateTime, Float, Index, Integer, String, Text, UniqueConstraint, func,
+    JSON, BigInteger, Boolean, DateTime, Float, Index, Integer, String, Text, UniqueConstraint, func,
 )
-from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
+from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, validates
 
 
 def utcnow() -> datetime:
@@ -35,8 +35,9 @@ class Business(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True)
 
-    # OSM-идентификатор вида "node/123456" — уникален глобально
-    osm_id: Mapped[str] = mapped_column(String(32), unique=True, index=True)
+    # OSM-идентификатор вида "node/123456" — уникален глобально. У записей, которые
+    # пришли не из OSM (НСЗУ, likarni.com), тут "<источник>/<их id>", см. sources/
+    osm_id: Mapped[str] = mapped_column(String(64), unique=True, index=True)
     osm_type: Mapped[str] = mapped_column(String(8))
     # osm_id'ы записей, схлопнутых в эту при гео-дедупе
     merged_ids: Mapped[list | None] = mapped_column(JSON)
@@ -54,6 +55,15 @@ class Business(Base):
     # None = не проверяли, True/False = результат MX-проверки домена
     email_valid: Mapped[bool | None] = mapped_column(Boolean)
     socials: Mapped[dict | None] = mapped_column(JSON)
+    # has_website / not_found / ddg_failed / site_down; None = сайта нет, но и не искали.
+    # Всё, кроме has_website, — сегмент под апсейл «сделаем сайт заодно с ботом».
+    website_status: Mapped[str | None] = mapped_column(String(16), index=True)
+
+    # Из госреестров (НСЗУ): руководитель — это и есть ЛПР, которому звонят
+    contact_person: Mapped[str | None] = mapped_column(String(255))
+    edrpou: Mapped[str | None] = mapped_column(String(16), index=True)
+    # Связь с внешними источниками — {"nszu": "<division_id>", "likarni": "<url>"}
+    external_ids: Mapped[dict | None] = mapped_column(JSON)
 
     # --- главный сигнал для продаж: что у них уже стоит ---
     # {"booking": ["yclients"], "chat": ["tidio"], "platform": ["tilda"]}
@@ -90,6 +100,13 @@ class Business(Base):
         Index("ix_city_category", "city", "category"),
         Index("ix_status_enriched", "status", "enriched_at"),
     )
+
+    @validates("website")
+    def _track_website(self, _key: str, value: str | None) -> str | None:
+        """Появился сайт — статус меняется сам, из какого бы места кода его ни проставили."""
+        if value:
+            self.website_status = "has_website"
+        return value
 
     # --- удобные производные ---
 
@@ -142,6 +159,23 @@ class ScrapeRun(Base):
 
     def __repr__(self) -> str:  # pragma: no cover
         return f"<ScrapeRun {self.kind} {self.city}/{self.category} {self.found_count}>"
+
+
+class CityArea(Base):
+    """Кэш геокодинга: граница города стабильна, Nominatim на каждый прогон не нужен."""
+
+    __tablename__ = "city_areas"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    key: Mapped[str] = mapped_column(String(128), unique=True, index=True)  # normalize_city()
+    name: Mapped[str] = mapped_column(String(128))
+    display_name: Mapped[str] = mapped_column(String(512))
+    osm_type: Mapped[str] = mapped_column(String(16))
+    osm_id: Mapped[int] = mapped_column(BigInteger)
+    lat: Mapped[float] = mapped_column(Float)
+    lon: Mapped[float] = mapped_column(Float)
+    bbox: Mapped[list] = mapped_column(JSON)  # south, north, west, east
+    cached_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
 class ApiUsage(Base):

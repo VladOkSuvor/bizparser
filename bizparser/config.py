@@ -63,6 +63,12 @@ class Settings:
     site_delay: float = field(default_factory=lambda: _env_float("SITE_DELAY", 1.0))
     # DuckDuckGo HTML — серая зона, только медленно и только как fallback.
     ddg_delay: float = field(default_factory=lambda: _env_float("DDG_DELAY", 6.0))
+    # Мед-агрегаторы: чужой сервер с листингами, ходим медленно, как люди
+    likarni_delay: float = field(default_factory=lambda: _env_float("LIKARNI_DELAY", 3.0))
+    doc_ua_delay: float = field(default_factory=lambda: _env_float("DOC_UA_DELAY", 3.0))
+    # discover-all: пауза между городами поверх паузы между запросами Overpass,
+    # чтобы прогон по всей стране не превращался в пиковую нагрузку на инстанс
+    city_delay: float = field(default_factory=lambda: _env_float("CITY_DELAY", 30.0))
 
     # --- enrichment ---
     max_pages_per_site: int = 4  # главная + до 3 «контактных» страниц
