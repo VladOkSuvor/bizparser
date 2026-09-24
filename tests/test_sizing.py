@@ -7,7 +7,15 @@ contact:website считались как два разных цифровых �
 """
 from __future__ import annotations
 
-from bizparser.sizing import estimate
+from bizparser.categories import CATEGORIES
+from bizparser.sizing import BASELINE, estimate
+
+
+def test_every_category_has_an_explicit_baseline():
+    """Страховка от опечатки/забытой категории: без этого теста отсутствие в
+    BASELINE молча даёт нейтральный дефолт вместо осознанного веса."""
+    missing = set(CATEGORIES) - set(BASELINE)
+    assert not missing, f"Категории без baseline в sizing.py: {sorted(missing)}"
 
 
 def test_baseline_no_signals_is_micro():

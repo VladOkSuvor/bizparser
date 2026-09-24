@@ -25,7 +25,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from datetime import date
+from datetime import datetime, timezone
 
 from sqlalchemy import select
 
@@ -66,7 +66,9 @@ def needs_lookup(biz: Business) -> bool:
 
 
 def _current_period() -> str:
-    return date.today().strftime("%Y-%m")
+    # UTC, а не локальное время машины — иначе бюджетный период "плывёт" в
+    # зависимости от таймзоны, в которой запущен процесс (см. models.as_utc)
+    return datetime.now(timezone.utc).strftime("%Y-%m")
 
 
 def usage_this_month() -> int:
@@ -133,14 +135,17 @@ def lookup(biz: Business) -> LookupResult:
                 delay=settings.google_places_delay, retries=1,
                 headers=_headers(FIELD_MASK_ID_ONLY), json={"textQuery": query},
             )
-            result.called += 1
-            data = _safe_json(resp) if resp is not None else None
-            places = (data or {}).get("places") or []
-            if not places:
+            # В бюджет считаем только реально дошедшие до Google запросы — иначе
+            # сетевой сбой сам съедает месячный лимит, ничего не купив
+            if resp is None:
                 return result
-            place_id = places[0].get("id")
-            if not place_id:  # схема ответа изменилась — не наша вина, но и не крах
-                log.error("Google Places: у результата поиска нет 'id': %s", places[0])
+            result.called += 1
+            data = _safe_json(resp)
+            places = (data or {}).get("places") or []
+            place_id = places[0].get("id") if places else None
+            if not place_id:  # пусто или схема ответа изменилась — не наша вина, но и не крах
+                if places:
+                    log.error("Google Places: у результата поиска нет 'id': %s", places[0])
                 return result
             result.place_id = place_id
 
@@ -149,9 +154,9 @@ def lookup(biz: Business) -> LookupResult:
             delay=settings.google_places_delay, retries=1,
             headers=_headers(FIELD_MASK_DETAILS),
         )
-        result.called += 1
         if resp is None:
             return result
+        result.called += 1
         data = _safe_json(resp)
         if data is None:
             return result

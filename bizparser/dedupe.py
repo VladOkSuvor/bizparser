@@ -18,6 +18,7 @@ from dataclasses import dataclass
 from difflib import SequenceMatcher
 from math import asin, cos, radians, sin, sqrt
 
+from . import automation as auto
 from .config import settings
 from .models import Business, as_utc
 
@@ -145,9 +146,31 @@ def _pick_survivor(a: Business, b: Business) -> tuple[Business, Business]:
 
 
 MERGE_FIELDS = (
-    "address", "lat", "lon", "phone", "website", "email", "raw_tags",
-    "size_estimate", "size_signals", "automation", "has_automation",
+    "address", "lat", "lon", "phone", "website", "raw_tags",
+    "size_estimate", "size_signals", "google_place_id", "google_places_data",
 )
+
+
+def _merge_email(keep: Business, drop: Business) -> None:
+    """email и его MX-вердикт переносим только вместе — иначе email_valid
+    останется относиться к другому (уже переписанному) адресу."""
+    if not keep.email and drop.email:
+        keep.email = drop.email
+        keep.email_valid = drop.email_valid
+
+
+def _merge_automation(keep: Business, drop: Business) -> None:
+    """Сами находки сливаем как со второй страницы того же сайта, а
+    has_automation всегда пересчитываем из результата — а не копируем как
+    независимое поле, иначе True/False может разойтись со словарём (drop
+    has_automation=False не проходит общий "keep in (None, '')" фильтр, а
+    drop.automation при этом всё равно перельётся сюда)."""
+    if drop.automation:
+        merged_auto = dict(keep.automation or {})
+        auto.merge(merged_auto, drop.automation)
+        keep.automation = merged_auto
+    if keep.has_automation is not None or drop.has_automation is not None:
+        keep.has_automation = auto.is_automated(keep.automation)
 
 
 def merge_pair(pair: MergePair) -> None:
@@ -157,6 +180,9 @@ def merge_pair(pair: MergePair) -> None:
     for attr in MERGE_FIELDS:
         if getattr(keep, attr) in (None, "") and getattr(drop, attr) not in (None, ""):
             setattr(keep, attr, getattr(drop, attr))
+
+    _merge_email(keep, drop)
+    _merge_automation(keep, drop)
 
     if drop.socials:
         merged = dict(keep.socials or {})
@@ -175,8 +201,8 @@ def merge_pair(pair: MergePair) -> None:
     if drop.notes:
         keep.notes = f"{(keep.notes or '')} {drop.notes}".strip()
 
-    # Не теряем факт проверки сайта: берём самую свежую дату из двух
-    for attr in ("enriched_at", "last_verified_at"):
+    # Не теряем факт проверки сайта/Google Places: берём самую свежую дату из двух
+    for attr in ("enriched_at", "last_verified_at", "google_checked_at"):
         theirs, ours = as_utc(getattr(drop, attr)), as_utc(getattr(keep, attr))
         if theirs and (ours is None or theirs > ours):
             setattr(keep, attr, theirs)

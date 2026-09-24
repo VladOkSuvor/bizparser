@@ -56,8 +56,8 @@ def geocode_city(city: str, country: str | None = "Ukraine") -> Place | None:
     try:
         results = resp.json()
     except ValueError:
-        # Как и Overpass, Nominatim под нагрузкой иногда отдаёт не-JSON
-        # (HTML-страницу ошибки) вместо валидного ответа.
+        # Как и Overpass, Nominatim под нагрузкой (или при бане по IP) иногда
+        # отдаёт не-JSON (HTML-страницу ошибки) вместо валидного ответа.
         log.error("Nominatim вернул не-JSON (вероятно, перегружен): %s", resp.text[:200])
         return None
     if not results:
@@ -67,15 +67,19 @@ def geocode_city(city: str, country: str | None = "Ukraine") -> Place | None:
     # Нужен именно полигон границы — node как area работать не будет
     for item in results:
         if item.get("osm_type") in AREA_OFFSET:
-            bb = [float(x) for x in item["boundingbox"]]
-            return Place(
-                display_name=item["display_name"],
-                osm_type=item["osm_type"],
-                osm_id=int(item["osm_id"]),
-                lat=float(item["lat"]),
-                lon=float(item["lon"]),
-                bbox=(bb[0], bb[1], bb[2], bb[3]),
-            )
+            try:
+                bb = [float(x) for x in item["boundingbox"]]
+                return Place(
+                    display_name=item["display_name"],
+                    osm_type=item["osm_type"],
+                    osm_id=int(item["osm_id"]),
+                    lat=float(item["lat"]),
+                    lon=float(item["lon"]),
+                    bbox=(bb[0], bb[1], bb[2], bb[3]),
+                )
+            except (KeyError, ValueError, TypeError):
+                log.error("Nominatim отдал неожиданную форму записи для %r: %r", city, item)
+                continue
 
     log.error("Для %r нашлись только точечные объекты без границы", city)
     return None
