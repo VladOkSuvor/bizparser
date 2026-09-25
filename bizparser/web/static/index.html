@@ -1,0 +1,96 @@
+<!doctype html>
+<html lang="uk">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Ліди — CRM</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap">
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <div class="wrap">
+    <header class="top">
+      <div>
+        <h1>Ліди</h1>
+        <div id="subtitle" class="subtitle"></div>
+      </div>
+      <div class="top-actions">
+        <span id="sync-note" class="muted"></span>
+        <button id="sync-btn" class="btn" hidden>Оновити Google Sheets</button>
+      </div>
+    </header>
+
+    <nav id="status-tabs" class="tabs" aria-label="Статус"></nav>
+
+    <section class="filters">
+      <label class="search">
+        <svg width="15" height="15" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+          <circle cx="7" cy="7" r="5.25" stroke="currentColor" stroke-width="1.5"/>
+          <path d="M11 11l3.5 3.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+        </svg>
+        <input id="f-q" type="search" placeholder="Назва або телефон" autocomplete="off" aria-label="Пошук">
+      </label>
+      <select id="f-city" aria-label="Місто"><option value="">Усі міста</option></select>
+      <select id="f-category" aria-label="Категорія"><option value="">Усі категорії</option></select>
+      <select id="f-website" aria-label="Сайт">
+        <option value="">Сайт: будь-який</option>
+        <option value="none">Сайту немає</option>
+        <option value="has">Сайт є</option>
+        <option value="unknown">Невідомо</option>
+      </select>
+      <label class="check"><input id="f-phone" type="checkbox" checked> З телефоном</label>
+    </section>
+
+    <main>
+      <div class="table-wrap">
+        <table class="leads">
+          <thead>
+            <tr>
+              <th>Лід</th>
+              <th class="phone-col">Телефон</th>
+              <th class="site-col">Сайт</th>
+              <th class="status-col">Статус</th>
+            </tr>
+          </thead>
+          <tbody id="rows"></tbody>
+        </table>
+        <p id="empty" class="empty" hidden>Нічого не знайдено за цими фільтрами</p>
+      </div>
+      <footer class="pager">
+        <span id="range" class="muted"></span>
+        <button id="prev" class="btn">← Назад</button>
+        <button id="next" class="btn">Далі →</button>
+      </footer>
+    </main>
+  </div>
+
+  <aside id="card" class="card" hidden aria-label="Картка ліда">
+    <div class="card-head">
+      <div>
+        <h2 id="card-title"></h2>
+        <div id="card-meta" class="lead-meta"></div>
+      </div>
+      <button id="card-close" class="btn ghost icon" aria-label="Закрити">✕</button>
+    </div>
+    <dl id="card-fields" class="fields"></dl>
+
+    <form id="card-form" class="card-form">
+      <label for="card-status">Статус</label>
+      <select id="card-status"></select>
+      <label for="card-comment">Коментар</label>
+      <textarea id="card-comment" rows="3" placeholder="Що сказали, коли передзвонити…"></textarea>
+      <button type="submit" class="btn primary">Зберегти</button>
+    </form>
+
+    <h3>Історія</h3>
+    <ol id="card-history" class="history"></ol>
+  </aside>
+  <div id="backdrop" class="backdrop" hidden></div>
+
+  <div id="toast" class="toast" role="status" hidden></div>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>

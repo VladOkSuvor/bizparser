@@ -27,7 +27,7 @@ from .db import init_db, session_scope
 from .enrich import SiteContacts, normalize_url, scrape_many
 from .extract import normalize_phone
 from .geocode import Place
-from .models import Business, ScrapeRun, as_utc, utcnow
+from .models import NO_WEBSITE_STATUSES, Business, ScrapeRun, as_utc, utcnow
 from .overpass import build_query, fetch, parse_elements
 from .sizing import estimate
 from .sources import base as src
@@ -222,10 +222,6 @@ def _after_discover(city: str | None, new: int, no_dedupe: bool, updated: int = 
     # После дедупа: до него один и тот же адрес, пришедший node+way, сам себя
     # раздувает в branch_count (см. предупреждение в sizing.estimate)
     if new or updated:
-        _recompute_sizes(city=city)
-    # После дедупа: до него один и тот же адрес, пришедший node+way, сам себя
-    # раздувает в branch_count (см. предупреждение в sizing.estimate)
-    if total_new or total_upd:
         _recompute_sizes(city=city)
 
 
@@ -772,14 +768,8 @@ def sheets_sync() -> None:
         raise typer.Exit(1)
 
     try:
-        with console.status("Забираю правки из таблицы…"):
-            pulled = gsheets.pull()
-
-        with session_scope() as session:
-            rows = list(session.scalars(select(Business).order_by(Business.id)))
-
-        with console.status(f"Обновляю таблицу ({len(rows)} записей)…"):
-            pushed = gsheets.push(rows)
+        with console.status("Забираю правки из таблицы и обновляю её…"):
+            pulled, pushed = gsheets.sync()
     except Exception as exc:  # noqa: BLE001 — API Google Sheets, сеть или права могли подвести
         # gspread кидает свои исключения (APIError и т.п.) без обёртки в sheets.py —
         # ловим на верхнем уровне, чтобы вместо голого трейсбека пользователь увидел
@@ -791,6 +781,25 @@ def sheets_sync() -> None:
     console.print(
         f"[green]Готово.[/green] Правок из таблицы: {pulled}, в таблице теперь {pushed} строк."
     )
+
+
+@app.command("web")
+def web(
+    host: str = typer.Option("127.0.0.1", help="0.0.0.0 — открыть в локальную сеть (задай CRM_PASSWORD!)"),
+    port: int = typer.Option(8000),
+    reload: bool = typer.Option(False, help="Перезапуск при правках кода — для разработки"),
+) -> None:
+    """CRM в браузере: лиды из этой же базы, статусы звонков, история, синк с Sheets."""
+    try:
+        import uvicorn
+    except ImportError:
+        console.print("[red]Нужны зависимости CRM: pip install -e '.[web]'[/red]")
+        raise typer.Exit(1)
+    if host not in ("127.0.0.1", "localhost") and not settings.crm_password:
+        console.print("[red]Без CRM_PASSWORD в .env база лидов будет открыта всей сети — не запускаю.[/red]")
+        raise typer.Exit(1)
+    console.print(f"CRM: [bold]http://{host}:{port}[/bold]")
+    uvicorn.run("bizparser.web.app:app", host=host, port=port, reload=reload)
 
 
 # --- внешние источники (мед) ------------------------------------------------
@@ -963,8 +972,8 @@ def list_rows(
     console.print(table)
     if no_website:
         console.print(
-            "[dim]«не искали» — сайт мог и найтись: прогони `find-sites --with-phone`, "
-            "чтобы не предлагать сайт тому, у кого он есть.[/dim]"
+            "[dim]Здесь только проверенные: лиды, где сайт не искали или поиск DDG сорвался, "
+            "не показаны — прогони `find-sites --with-phone`.[/dim]"
         )
     console.print("[dim]Полные данные — в CSV: `export -o leads.csv`[/dim]")
 
@@ -975,8 +984,6 @@ WEBSITE_STATUS_LABELS = {
     "ddg_failed": "[dim]поиск не прошёл[/dim]",
     None: "[dim]не искали[/dim]",
 }
-# Всё, кроме has_website: сайта нет, не открывается или его ещё не искали
-NO_WEBSITE_STATUSES = ("not_found", "site_down", "ddg_failed")
 
 
 @app.command()
@@ -1037,8 +1044,8 @@ def stats() -> None:
     no_site = sum(site_states.get(k, 0) for k in NO_WEBSITE_STATUSES)
     console.print(
         f"\n[bold]Апсейл «сайт»[/bold] (с контактом): сайта нет — {no_site} "
-        f"(не найден {site_states.get('not_found', 0)}, не открывается {site_states.get('site_down', 0)}, "
-        f"сбой поиска {site_states.get('ddg_failed', 0)}); не искали — {site_states.get(None, 0)}"
+        f"(не найден {site_states.get('not_found', 0)}, не открывается {site_states.get('site_down', 0)}); "
+        f"неизвестно — сбой поиска {site_states.get('ddg_failed', 0)}, не искали {site_states.get(None, 0)}"
     )
 
     console.print(f"\n[bold]Автоматизация[/bold] (проверено сайтов: {checked})")
@@ -1161,11 +1168,7 @@ def _query(
         if valid_email_only:
             stmt = stmt.where(or_(Business.email.is_(None), Business.email_valid.is_(True)))
         if no_website:
-            # Включая «не искали»: иначе сегмент пуст, пока не прогнан find-sites
-            stmt = stmt.where(
-                or_(Business.website_status.is_(None),
-                    Business.website_status.in_(NO_WEBSITE_STATUSES))
-            )
+            stmt = stmt.where(Business.website_status.in_(NO_WEBSITE_STATUSES))
         return list(session.scalars(stmt.order_by(Business.name).limit(limit)))
 
 

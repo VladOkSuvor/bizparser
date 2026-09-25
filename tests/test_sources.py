@@ -130,6 +130,22 @@ def test_website_status_follows_website_field():
                     website="https://x.ua").website_status == "has_website"
 
 
+def test_no_website_list_excludes_unknown(session, monkeypatch):
+    from contextlib import contextmanager
+
+    from bizparser import cli
+
+    statuses = {1: "not_found", 2: "site_down", 3: "ddg_failed", 4: None}
+    session.add_all(_biz(i, phone="+380", website_status=s) for i, s in statuses.items())
+    session.add(_biz(5, phone="+380", website="https://x.ua"))
+    session.commit()
+    monkeypatch.setattr(cli, "session_scope", contextmanager(lambda: (yield session)))
+
+    rows = cli._query(None, None, None, True, 100, no_website=True)
+    # ddg_failed и «не искали»: сайт может быть — в апсейл «нет сайта» не кладём
+    assert sorted(b.id for b in rows) == [1, 2]
+
+
 # --- НСЗУ -------------------------------------------------------------------
 
 LEGAL_COLS = ["legal_entity_id", "legal_entity_edrpou", "legal_entity_name", "care_type",

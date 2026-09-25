@@ -105,5 +105,10 @@ class Settings:
         default_factory=lambda: _env("GOOGLE_SERVICE_ACCOUNT_FILE", "service_account.json")
     )
 
+    # --- CRM (bizparser web) ---
+    # Пусто = без пароля: годится, пока сервер слушает только 127.0.0.1.
+    # Перед тем как открывать CRM в сеть звонарям — задать обязательно.
+    crm_password: str = field(default_factory=lambda: _env("CRM_PASSWORD", ""))
+
 
 settings = Settings()

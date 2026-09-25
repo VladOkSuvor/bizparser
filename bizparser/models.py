@@ -5,7 +5,8 @@ from __future__ import annotations
 from datetime import datetime, timezone
 
 from sqlalchemy import (
-    JSON, BigInteger, Boolean, DateTime, Float, Index, Integer, String, Text, UniqueConstraint, func,
+    JSON, BigInteger, Boolean, DateTime, Float, ForeignKey, Index, Integer, String, Text,
+    UniqueConstraint, func,
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, validates
 
@@ -24,6 +25,12 @@ def as_utc(value: datetime | None) -> datetime | None:
     if value is None:
         return None
     return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+
+
+# Сегмент апсейла «нет сайта»: сайта точно нет или он не открывается. ddg_failed и
+# «не искали» (NULL) сюда не входят: про них неизвестно, есть ли сайт, — предлагать
+# сайт такому лиду нельзя
+NO_WEBSITE_STATUSES = ("not_found", "site_down")
 
 
 class Base(DeclarativeBase):
@@ -79,6 +86,10 @@ class Business(Base):
     status: Mapped[str] = mapped_column(String(24), default="new", index=True)
     # new -> enriched -> contacted -> replied / rejected / no_contacts
     notes: Mapped[str | None] = mapped_column(Text)
+    # Стадия воронки из CRM (bizparser/web, список — crm.STATUSES). Отдельно от status:
+    # тот ведёт пайплайн сбора, этот — звонари руками. None = «Новий», ещё не набирали.
+    crm_status: Mapped[str | None] = mapped_column(String(16), index=True)
+    crm_updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     raw_tags: Mapped[dict | None] = mapped_column(JSON)
     enriched_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
@@ -135,6 +146,19 @@ class Business(Base):
 
     def __repr__(self) -> str:  # pragma: no cover
         return f"<Business {self.osm_id} {self.name!r} {self.category}>"
+
+
+class LeadEvent(Base):
+    """История CRM: смена статуса или комментарий звонаря. Только дописывается."""
+
+    __tablename__ = "lead_events"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    business_id: Mapped[int] = mapped_column(ForeignKey("businesses.id"), index=True)
+    old_status: Mapped[str | None] = mapped_column(String(16))
+    new_status: Mapped[str | None] = mapped_column(String(16))
+    comment: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
 class ScrapeRun(Base):

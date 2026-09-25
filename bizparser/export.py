@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 from typing import Sequence
 
+from . import crm
 from .models import Business
 
 COLUMNS = [
@@ -12,7 +13,7 @@ COLUMNS = [
     "website_status", "contact_person", "edrpou",
     "instagram", "facebook", "telegram", "other_socials",
     "has_automation", "automation", "size_estimate",
-    "contact_score", "status", "source", "osm_id", "merged_ids",
+    "contact_score", "status", "crm_status", "source", "osm_id", "merged_ids",
     "lat", "lon", "last_verified_at", "notes",
 ]
 
@@ -44,6 +45,8 @@ def row_dict(biz: Business) -> dict:
         "size_estimate": biz.size_estimate or "",
         "contact_score": biz.contact_score,
         "status": biz.status,
+        # Только на выход: звонари меняют стадию на сайте CRM, pull() эту колонку не читает
+        "crm_status": crm.label(biz.crm_status),
         "source": biz.source,
         "osm_id": biz.osm_id,
         "merged_ids": ", ".join(biz.merged_ids or []),

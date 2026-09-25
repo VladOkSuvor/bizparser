@@ -21,6 +21,8 @@ import gspread
 from gspread.exceptions import WorksheetNotFound
 
 from .config import settings
+from sqlalchemy import select
+
 from .db import session_scope
 from .export import COLUMNS, row_dict
 from .models import Business
@@ -78,3 +80,11 @@ def push(rows: list[Business]) -> int:
     ws.update(data)
     ws.freeze(rows=1)
     return len(rows)
+
+
+def sync() -> tuple[int, int]:
+    """pull, затем push — единственный правильный порядок (см. docstring модуля)."""
+    pulled = pull()
+    with session_scope() as session:
+        rows = list(session.scalars(select(Business).order_by(Business.id)))
+    return pulled, push(rows)
