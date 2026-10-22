@@ -47,6 +47,26 @@ SOCIAL_PATTERNS = {
 # Соцсети самой платформы/шаблона, а не бизнеса
 SOCIAL_JUNK = {"sharer", "share.php", "intent", "plugins", "profile.php?id=0"}
 
+# Первый сегмент пути, который у Instagram не является профилем: /reel/…, /p/…
+# и т.п. Иначе ссылка на рилс из ленты на сайте уезжала в базу как аккаунт.
+INSTAGRAM_RESERVED = {
+    "p", "reel", "reels", "tv", "explore", "accounts", "stories", "direct",
+    "about", "legal", "developer", "web", "challenge", "s",
+}
+INSTAGRAM_USERNAME_RE = re.compile(r"^[a-z0-9._]{1,30}$")
+INSTAGRAM_URL_RE = re.compile(r"^(?:https?://)?(?:[\w-]+\.)?instagram\.com/([^/?#]+)", re.I)
+
+# Подпись веб-студии в футере («Розроблено …», «Developed by …»): её соцсети —
+# это соцсети студии, а не бизнеса.
+DEV_CREDIT_RE = re.compile(
+    r"(розроб|разработ|developed|created by|made by|powered by|"
+    r"створенн?я сайт|создание сайт|веб[- ]?студ|web[- ]?studio)",
+    re.I,
+)
+
+# Для этих сетей нужное значение лежит в query (?number=…), обрезать нельзя
+KEEP_QUERY = {"viber", "whatsapp"}
+
 CONTACT_LINK_RE = re.compile(
     r"(контакт|contact|kontakt|звяж|зв.?язатися|связ|about|про[- _]?нас|о[- _]?нас|reach)",
     re.I,
@@ -113,6 +133,37 @@ def find_emails(html: str, limit: int = 5) -> list[str]:
     return found[:limit]
 
 
+def normalize_instagram(value: str | None) -> str | None:
+    """Ссылка, @handle или голое имя (как пишут в теге OSM) →
+    https://instagram.com/<username>. Не профиль (рилс, пост, чужой URL) → None."""
+    if not value:
+        return None
+    raw = value.strip()
+    match = INSTAGRAM_URL_RE.match(raw)
+    if match:
+        username = match.group(1)
+    elif "/" in raw or " " in raw:
+        return None
+    else:
+        username = raw.lstrip("@")
+    username = username.lower()
+    if username in INSTAGRAM_RESERVED or not INSTAGRAM_USERNAME_RE.match(username):
+        return None
+    return f"https://instagram.com/{username}"
+
+
+def _is_dev_credit(node) -> bool:
+    """Ссылка стоит в подписи разработчика сайта. Родителя смотрим, только если
+    в нём одна эта ссылка — в футере подпись студии соседствует с соцсетями бизнеса."""
+    if DEV_CREDIT_RE.search(node.text() or ""):
+        return True
+    parent = node.parent
+    if parent is None or len(parent.css("a")) > 1:
+        return False
+    parent_text = parent.text() or ""
+    return len(parent_text) < 200 and bool(DEV_CREDIT_RE.search(parent_text))
+
+
 def find_socials(tree: HTMLParser, base_url: str) -> dict[str, str]:
     out: dict[str, str] = {}
     for node in tree.css("a[href]"):
@@ -122,11 +173,22 @@ def find_socials(tree: HTMLParser, base_url: str) -> dict[str, str]:
         url = href if href.startswith(("http", "viber:")) else urljoin(base_url, href)
         if any(junk in url for junk in SOCIAL_JUNK):
             continue
+        dev_credit: bool | None = None
         for network, pattern in SOCIAL_PATTERNS.items():
-            if network in out:
+            if network in out or not pattern.match(url):
                 continue
-            if pattern.match(url):
-                out[network] = url.split("?")[0]
+            if dev_credit is None:
+                dev_credit = _is_dev_credit(node)
+            if dev_credit:
+                break
+            if network == "instagram":
+                link = normalize_instagram(url)
+            elif network in KEEP_QUERY:
+                link = url
+            else:
+                link = url.split("?")[0]
+            if link:
+                out[network] = link
     return out
 
 

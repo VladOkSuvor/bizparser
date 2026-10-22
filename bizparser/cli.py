@@ -21,17 +21,19 @@ from . import dedupe as dd
 from . import emailcheck
 from . import export as exporter
 from . import google_places as gp
+from . import instagram as ig
+from . import outreach as ob
 from . import sheets as gsheets
 from .config import settings
 from .db import init_db, session_scope
 from .enrich import SiteContacts, normalize_url, scrape_many
 from .extract import normalize_phone
 from .geocode import Place
-from .models import NO_WEBSITE_STATUSES, Business, ScrapeRun, as_utc, utcnow
+from .models import NO_WEBSITE_STATUSES, Business, Outreach, ScrapeRun, as_utc, utcnow
 from .overpass import build_query, fetch, parse_elements
 from .sizing import estimate
 from .sources import base as src
-from .websearch import SearchFailed, find_website
+from .websearch import SearchFailed, find_website, search_instagram
 
 app = typer.Typer(add_completion=False, help="Сбор контактов малого бизнеса из OSM + сайтов.")
 console = Console()
@@ -648,6 +650,138 @@ def find_sites(
     console.print(f"[green]Найдено сайтов: {hits}/{len(targets)}.[/green] Дальше гоняй `enrich`.")
     if failed:
         console.print(f"[yellow]Сбоев поиска: {failed} — они поищутся снова при следующем запуске.[/yellow]")
+
+
+IG_NONE_MARK = "[ig:none]"
+
+
+@app.command("find-instagram")
+def find_instagram(
+    limit: int = typer.Option(20, "--limit", "-n", help="Максимум запросов за прогон"),
+    city: Optional[str] = typer.Option(None, "--city", "-c"),
+    category: Optional[str] = typer.Option(None, "--category", "-k"),
+    loose_city: bool = typer.Option(
+        False, "--loose-city", help="Принимать профиль без упоминания города (риск чужой клиники)"
+    ),
+    retry_none: bool = typer.Option(
+        False, "--retry-none", help="Искать заново и тех, у кого уже не нашли"
+    ),
+    dry_run: bool = typer.Option(False, "--dry-run", help="Искать и показать, но не писать в базу"),
+    yes: bool = typer.Option(False, "--yes", help="Не спрашивать подтверждение"),
+) -> None:
+    """Найти Instagram лидов через DuckDuckGo: `site:instagram.com "<name>" <city>`.
+
+    Профиль принимается, только если похоже название (порог DEDUPE_THRESHOLD) и
+    в профиле упомянут город. Та же серая зона DDG, что у find-sites: пауза
+    DDG_DELAY и малые пачки.
+    """
+    if not (yes or dry_run):
+        console.print(
+            "[yellow]Это парсинг HTML-выдачи DuckDuckGo — против их ToS при автоматизации "
+            "и чревато баном по IP. Малыми пачками.[/yellow]"
+        )
+        if not typer.confirm("Продолжить?"):
+            raise typer.Abort()
+
+    with session_scope() as session:
+        stmt = select(Business)
+        if not retry_none:
+            stmt = stmt.where(or_(Business.notes.is_(None), Business.notes.not_like(f"%{IG_NONE_MARK}%")))
+        if city:
+            stmt = stmt.where(Business.city == city)
+        if category:
+            stmt = stmt.where(Business.category == category)
+        # С телефоном/сайтом — живые места: начинаем с них
+        rows = session.scalars(stmt.order_by(Business.phone.is_(None), Business.id))
+        targets = [b for b in rows if not (b.socials or {}).get("instagram")][:limit]
+
+    if not targets:
+        console.print("[yellow]Нет лидов без Instagram под эти фильтры.[/yellow]")
+        return
+
+    mode = " [dim](dry-run, база не меняется)[/dim]" if dry_run else ""
+    console.print(f"Ищу Instagram для {len(targets)} лидов (пауза {settings.ddg_delay}с){mode}…")
+    hits = failed = 0
+    for biz in targets:
+        try:
+            results = search_instagram(biz.name, biz.city)
+        except SearchFailed as exc:
+            failed += 1
+            console.print(f"  [red]✗[/red] {biz.name}: DDG не ответил ({exc})")
+            if failed >= 3 and not hits:
+                console.print("[red]DDG отказывает раз за разом — похоже на бан по IP, останавливаюсь.[/red]")
+                break
+            continue
+
+        match = ig.pick_profile(biz.name, biz.city, results, require_city=not loose_city)
+        if match:
+            hits += 1
+            console.print(f"  [green]✓[/green] {biz.name} ({biz.city}) → {match.url} "
+                          f"[dim]похожесть {match.score:.2f}[/dim]")
+        else:
+            best = ig.best_candidate(biz.name, biz.city, results)
+            why = (f"лучший @{best.handle}: похожесть {best.score:.2f}"
+                   f"{'' if best.city_ok else ', город не упомянут'}") if best else "выдача пустая"
+            console.print(f"  [dim]— {biz.name} ({biz.city}): не найдено ({why})[/dim]")
+        if dry_run:
+            continue
+
+        with session_scope() as session:
+            row = session.get(Business, biz.id)
+            if row is None:
+                continue
+            if match:
+                row.socials = {**(row.socials or {}), "instagram": match.url}
+                if "ddg_instagram" not in (row.source or "").split(","):
+                    row.source = f"{row.source},ddg_instagram"
+            else:
+                row.notes = f"{(row.notes or '')} {IG_NONE_MARK}".strip()
+
+    if not dry_run:
+        _record_run("find_instagram", city, category, found_count=len(targets), updated_count=hits)
+    console.print(f"[green]Найдено Instagram: {hits}/{len(targets)}.[/green] "
+                  "Дальше — `outreach-queue`.")
+    if failed:
+        console.print(f"[yellow]Сбоев поиска: {failed} — они поищутся снова при следующем запуске.[/yellow]")
+
+
+@app.command("outreach-queue")
+def outreach_queue(
+    category: Optional[str] = typer.Option(None, "--category", "-k"),
+    city: Optional[str] = typer.Option(None, "--city", "-c"),
+    no_website: bool = typer.Option(False, "--no-website", help="Только лиды без сайта (сегмент апсейла)"),
+    limit: Optional[int] = typer.Option(
+        None, "--limit", "-n", help="Сколько поставить (по умолчанию OUTREACH_DAILY_CAP)"
+    ),
+    dry_run: bool = typer.Option(False, "--dry-run", help="Показать, кто попадёт в очередь"),
+) -> None:
+    """Поставить лидов с Instagram в очередь холодной рассылки для внешнего агента.
+
+    Агент забирает задачи через POST /api/outreach/claim (не больше
+    OUTREACH_DAILY_CAP за сутки) и отчитывается через /api/outreach/{id}/result.
+    Одному лиду в один канал — одна задача: повторно в очередь он не встанет.
+    """
+    limit = limit if limit is not None else settings.outreach_daily_cap
+    with session_scope() as session:
+        rows = ob.candidates(session, category=category, city=city, no_website=no_website)[:limit]
+        if not rows:
+            console.print("[yellow]Некого ставить: нет лидов с Instagram вне очереди под эти фильтры.[/yellow]")
+            return
+        table = Table("id", "Название", "Категория", "Город", "Instagram")
+        for b in rows:
+            table.add_row(str(b.id), b.name, b.category, b.city, b.socials["instagram"])
+        console.print(table)
+        if dry_run:
+            console.print(f"[dim]dry-run: {len(rows)} лидов попали бы в очередь.[/dim]")
+            return
+        ob.enqueue(session, rows)
+        waiting = session.scalar(
+            select(func.count()).select_from(Outreach).where(Outreach.status == "queued")
+        )
+    console.print(
+        f"[green]В очередь: {len(rows)}.[/green] Всего ждут отправки: {waiting}, "
+        f"лимит агента — {settings.outreach_daily_cap} в сутки."
+    )
 
 
 @app.command("verify-emails")

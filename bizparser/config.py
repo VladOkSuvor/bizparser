@@ -110,5 +110,14 @@ class Settings:
     # Перед тем как открывать CRM в сеть звонарям — задать обязательно.
     crm_password: str = field(default_factory=lambda: _env("CRM_PASSWORD", ""))
 
+    # --- холодная рассылка (outreach) — отправляет внешний агент ---
+    # Сколько сообщений агент может забрать за скользящие 24 часа. Instagram банит
+    # новые аккаунты за пачки в директ: 20–40 в день — потолок, а не цель.
+    outreach_daily_cap: int = field(default_factory=lambda: _env_int("OUTREACH_DAILY_CAP", 20))
+    # Взял и не отчитался за столько минут — задача возвращается в очередь
+    outreach_claim_ttl_min: int = field(
+        default_factory=lambda: _env_int("OUTREACH_CLAIM_TTL_MIN", 120)
+    )
+
 
 settings = Settings()

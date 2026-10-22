@@ -161,6 +161,34 @@ class LeadEvent(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
+class Outreach(Base):
+    """Очередь холодных сообщений для внешнего агента (Instagram Direct и т.п.).
+
+    Одна строка = один лид в одном канале: второй раз тому же аккаунту первыми
+    не пишем. Сам текст и ход событий дописываются ещё и в lead_events — эта
+    таблица хранит только текущее состояние. Отправка — вне bizparser.
+    """
+
+    __tablename__ = "outreach"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    business_id: Mapped[int] = mapped_column(ForeignKey("businesses.id"), index=True)
+    channel: Mapped[str] = mapped_column(String(16), default="instagram")
+    handle: Mapped[str] = mapped_column(String(64))
+    # queued -> claimed -> sent -> replied; claimed -> failed / skipped
+    status: Mapped[str] = mapped_column(String(16), default="queued", index=True)
+    message: Mapped[str | None] = mapped_column(Text)
+    reply: Mapped[str | None] = mapped_column(Text)
+    error: Mapped[str | None] = mapped_column(Text)
+    attempts: Mapped[int] = mapped_column(Integer, default=0)
+    claimed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
+    sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    replied_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+    __table_args__ = (UniqueConstraint("business_id", "channel", name="uq_outreach_lead_channel"),)
+
+
 class ScrapeRun(Base):
     """История прогонов: что искали, когда, сколько нашли."""
 
