@@ -169,6 +169,18 @@ main { padding-bottom: 40px; }
 }
 .badge::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: var(--c); }
 
+/* Instagram и статус рассылки (bizparser/outreach.py:STATUSES) — на палитре воронки */
+.ig-line { display: flex; align-items: center; gap: 6px; margin-top: 3px; font-size: 12.5px; }
+.ig { color: var(--text-2); text-decoration: none; }
+.ig:hover { color: var(--accent); }
+.ig-line .badge { font-size: 11px; padding: 0 7px; }
+.ob-queued, .ob-skipped { --c: var(--st-new); }
+.ob-claimed { --c: var(--st-no_answer); }
+.ob-sent { --c: var(--st-in_progress); }
+.ob-replied { --c: var(--st-won); }
+.ob-failed { --c: var(--st-lost); }
+.ob-text { margin: 4px 0 0; white-space: pre-wrap; }
+
 .pager { display: flex; justify-content: flex-end; align-items: center; gap: 8px; padding-top: 16px; }
 .pager .muted { margin-right: auto; font-size: 13px; font-variant-numeric: tabular-nums; }
 

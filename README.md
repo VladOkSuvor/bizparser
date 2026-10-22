@@ -353,6 +353,68 @@ API: `GET /leads`, `GET /leads/{id}`, `PATCH /leads/{id}/status`
 сети, задай `CRM_PASSWORD` в `.env` и запусти `bizparser web --host 0.0.0.0` —
 без пароля команда откажется стартовать.
 
+### 7. Instagram: поиск аккаунтов и очередь для агента рассылки
+
+Официальный Instagram API не даёт писать первым, поэтому сама отправка в директ
+**не в bizparser** — её делает внешний агент малыми порциями (20–40 в день, иначе
+бан аккаунта). Здесь только сбор аккаунтов и очередь.
+
+**1. Найти Instagram** у лидов, где `socials.instagram` пуст:
+
+```bash
+python -m bizparser find-instagram --limit 5 --dry-run   # посмотреть, ничего не пишет
+python -m bizparser find-instagram --limit 20 --category dentist --city "Київ"
+```
+
+Запрос в DDG — `site:instagram.com "<name>" <city>` (описательный хвост
+названия вроде «– стоматологічний центр» отрезается). Ссылки нормализуются
+`extract.normalize_instagram` (посты/рилсы отбрасываются). Профиль принимается,
+только если **похоже название** — тот же порог `DEDUPE_THRESHOLD`, что у
+гео-дедупа; кириллица сравнивается с username ещё и в транслите — **и в
+профиле упомянут город**. `--loose-city` снимает проверку города (риск написать
+одноимённой клинике из другого города). Находка → `socials.instagram`, в
+`source` дописывается `ddg_instagram`; «не нашли» → `[ig:none]` в `notes`, такие
+лиды не ищутся повторно без `--retry-none`. Все ограничения `find-sites` в силе:
+пауза `DDG_DELAY`, три отказа DDG подряд — стоп. На практике DDG начинает
+показывать капчу уже после нескольких запросов подряд, так что держи пачки
+маленькими.
+
+**2. Поставить в очередь** — таблица `outreach`, одна строка на лид и канал:
+
+```bash
+python -m bizparser outreach-queue --category dentist --no-website --dry-run
+python -m bizparser outreach-queue --city "Київ"          # по умолчанию до OUTREACH_DAILY_CAP штук
+```
+
+Не попадают: лиды без Instagram, уже стоявшие в очереди, `crm_status` won/lost,
+а также **аккаунт, которому уже пишем от имени другого лида** (у филиалов и
+недосхлопнутых дублей один Instagram на несколько записей).
+
+**3. API для агента** — под тем же `CRM_PASSWORD`, что и CRM (Basic auth, логин любой):
+
+```bash
+# выдать до 5 задач — атомарно: два агента одну задачу не получат
+curl -u agent:$CRM_PASSWORD -X POST 'http://127.0.0.1:8000/api/outreach/claim?limit=5'
+# отчитаться
+curl -u agent:$CRM_PASSWORD -X POST http://127.0.0.1:8000/api/outreach/17/result \
+     -H 'Content-Type: application/json' -d '{"status": "sent", "text": "Добрий день! …"}'
+```
+
+`claim` отдаёт `{items, daily_cap, remaining_today}`; в каждой задаче — `handle`,
+`url` и `lead`: имя, категория, город, `has_website`, `automation`, `size` — чтобы
+агент писал по делу, а не шаблоном. Выдача ограничена `OUTREACH_DAILY_CAP`
+(по умолчанию 20) за скользящие 24 часа; `skipped` лимит не съедает. Задача,
+по которой агент не отчитался за `OUTREACH_CLAIM_TTL_MIN` (120 мин), снова
+выдаётся.
+
+`result`: `{"status": "sent" | "failed" | "skipped" | "replied", "text": "…"}` —
+для `sent` это отправленный текст, для `replied` — ответ, для `failed`/`skipped`
+— причина. Переходы: `queued → claimed → sent → replied`, `claimed → failed`,
+`queued/claimed → skipped`; остальное — 409. Каждый отчёт дописывается в
+`lead_events`, так что в CRM переписка видна в истории лида рядом со звонками;
+первое `sent` переводит лида из «Новий» в «В роботі». В CRM у лида видно
+`@handle` и статус рассылки — и в таблице, и в карточке.
+
 ## Оценка размера бизнеса
 
 `size_estimate` (`micro` / `small` / `medium`) — **эвристика, а не факт**. OSM не
@@ -391,11 +453,15 @@ SQLite по умолчанию (`businesses.db`), схема совместим�
 | `source` | `osm` / `osm,website_scrape` / `osm,nszu,likarni` … — накапливается |
 | `status` | `new` → `enriched` → `contacted` → `replied`/`rejected`, плюс `no_contacts` |
 | `raw_tags` | все теги OSM целиком — чтобы не перезапрашивать, если понадобится ещё поле |
-| `notes` | доп. телефоны, причины отказов (`[site:robots_disallow]`, `[ddg:none]`) |
+| `notes` | доп. телефоны, причины отказов (`[site:robots_disallow]`, `[ddg:none]`, `[ig:none]`) |
 | `website_status` | `has_website` / `not_found` / `site_down` / `ddg_failed` — см. «Апсейл» |
 | `contact_person`, `edrpou` | руководитель (ЛПР) и ЄДРПОУ юрлица — из НСЗУ |
 | `external_ids` | связь с внешними источниками: `{"nszu": "<division_id>", "likarni": "<slug>"}` |
 | `google_place_id`, `google_places_data`, `google_checked_at` | кэш опционального Google Places (см. выше); `google_checked_at` — маркер «уже смотрели», защищает от повторных платных вызовов |
+
+Таблица `outreach` — очередь холодной рассылки (см. раздел 7): `business_id`,
+`channel`, `handle`, `status`, `message`, `reply`, `error`, `attempts`,
+`claimed_at`, `sent_at`, `replied_at`. Хранит текущее состояние; история — в `lead_events`.
 
 Повторный `discover` по тому же городу не создаёт дублей и **не затирает** результаты
 enrichment'а: у существующих записей дозаполняются только пустые поля.
@@ -438,7 +504,9 @@ bizparser/
   overpass.py    построение запроса, разбор elements
   enrich.py      обход сайта, robots.txt
   extract.py     телефоны/почты/соцсети из HTML
-  websearch.py   fallback через DDG
+  websearch.py   fallback через DDG: сайт и Instagram
+  instagram.py   сверка найденного профиля с лидом (название + город)
+  outreach.py    очередь рассылки: enqueue / claim / result
   sizing.py      эвристика размера
   chains.py      отсечка супермаркетов/гипермаркетов и мед-сетей на discovery
   publicsector.py  отсечка государственных/коммунальных медучреждений

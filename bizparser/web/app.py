@@ -21,11 +21,12 @@ from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from .. import crm
+from .. import outreach as ob
 from .. import sheets as gsheets
 from ..config import settings
 from ..db import init_db, session_scope
 from ..export import row_dict
-from ..models import NO_WEBSITE_STATUSES, Business, LeadEvent, utcnow
+from ..models import NO_WEBSITE_STATUSES, Business, LeadEvent, Outreach, utcnow
 
 STATIC = Path(__file__).parent / "static"
 
@@ -68,6 +69,12 @@ class StatusChange(BaseModel):
     comment: str | None = Field(default=None, max_length=2000)
 
 
+class OutreachResult(BaseModel):
+    status: Literal["sent", "failed", "skipped", "replied"]
+    # sent — отправленный текст, replied — ответ, failed/skipped — причина
+    text: str | None = Field(default=None, max_length=5000)
+
+
 def _brief(biz: Business) -> dict:
     return {
         "id": biz.id,
@@ -80,6 +87,7 @@ def _brief(biz: Business) -> dict:
         "website_status": biz.website_status,
         "crm_status": biz.crm_status or crm.DEFAULT,
         "crm_updated_at": biz.crm_updated_at.isoformat() if biz.crm_updated_at else None,
+        "instagram": (biz.socials or {}).get("instagram"),
     }
 
 
@@ -117,6 +125,7 @@ def meta(session: Session = Depends(get_session)) -> dict:
             session.scalars(select(Business.category).distinct().order_by(Business.category))
         ),
         "sheets_enabled": gsheets.ENABLED,
+        "outreach_statuses": ob.STATUSES,
     }
 
 
@@ -160,10 +169,21 @@ def list_leads(
 
     total = session.scalar(select(func.count()).select_from(stmt.subquery()))
     # С телефоном — наверх: без него звонарю с лидом делать нечего
-    rows = session.scalars(
+    rows = list(session.scalars(
         stmt.order_by(Business.phone.is_(None), Business.name).limit(limit).offset(offset)
+    ))
+    sent = _outreach_by_lead(session, [b.id for b in rows])
+    items = [{**_brief(b), "outreach_status": getattr(sent.get(b.id), "status", None)} for b in rows]
+    return {"total": total, "items": items}
+
+
+def _outreach_by_lead(session: Session, ids: list[int]) -> dict[int, Outreach]:
+    if not ids:
+        return {}
+    rows = session.scalars(
+        select(Outreach).where(Outreach.business_id.in_(ids), Outreach.channel == ob.CHANNEL)
     )
-    return {"total": total, "items": [_brief(b) for b in rows]}
+    return {o.business_id: o for o in rows}
 
 
 def _get(session: Session, lead_id: int) -> Business:
@@ -180,10 +200,12 @@ def get_lead(lead_id: int, session: Session = Depends(get_session)) -> dict:
         select(LeadEvent).where(LeadEvent.business_id == lead_id)
         .order_by(LeadEvent.created_at.desc(), LeadEvent.id.desc())
     )
+    item = _outreach_by_lead(session, [lead_id]).get(lead_id)
     return {
         **row_dict(biz),
         **_brief(biz),
         "automation": biz.automation_summary,
+        "outreach": ob.serialize(item) if item else None,
         "events": [_event(e) for e in events],
     }
 
@@ -224,3 +246,39 @@ def sync() -> dict:
     except Exception as exc:  # noqa: BLE001 — сеть/права/квота Google, повтор безопасен
         raise HTTPException(502, f"Синхронізація не вдалась: {exc}") from exc
     return {"pulled": pulled, "pushed": pushed}
+
+
+# --- очередь рассылки для внешнего агента -----------------------------------
+# Тот же пароль CRM (dependency на уровне app). Отправляет сам агент — здесь
+# только выдача задач и приём отчётов.
+
+
+@app.post("/api/outreach/claim")
+def outreach_claim(
+    limit: int = Query(default=5, ge=1, le=100),
+    session: Session = Depends(get_session),
+) -> dict:
+    """Атомарно выдаёт до `limit` задач с контекстом лида, в пределах OUTREACH_DAILY_CAP."""
+    items = ob.claim(session, limit)
+    leads = {b.id: b for b in session.scalars(
+        select(Business).where(Business.id.in_([i.business_id for i in items]))
+    )} if items else {}
+    return {
+        "items": [ob.serialize(i, leads[i.business_id]) for i in items],
+        "daily_cap": ob.settings.outreach_daily_cap,
+        "remaining_today": ob.remaining_today(session),
+    }
+
+
+@app.post("/api/outreach/{item_id}/result")
+def outreach_result(
+    item_id: int, body: OutreachResult, session: Session = Depends(get_session)
+) -> dict:
+    item = session.get(Outreach, item_id)
+    if item is None:
+        raise HTTPException(404, "Задачу не знайдено")
+    try:
+        ob.record_result(session, item, body.status, body.text)
+    except ob.TransitionError as exc:
+        raise HTTPException(409, str(exc)) from exc
+    return ob.serialize(item)

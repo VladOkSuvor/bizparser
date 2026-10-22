@@ -38,7 +38,7 @@ const CATEGORY_LABELS = {
 };
 const catLabel = (key) => CATEGORY_LABELS[key] ?? key;
 
-const state = { status: "", offset: 0, total: 0, statuses: [], openId: null };
+const state = { status: "", offset: 0, total: 0, statuses: [], outreachStatuses: {}, openId: null };
 const $ = (id) => document.getElementById(id);
 
 // --- утилиты ---------------------------------------------------------------
@@ -104,6 +104,7 @@ function statusSelect(current, onChange) {
 async function loadMeta(first = false) {
   const meta = await api("/meta");
   state.statuses = meta.statuses;
+  state.outreachStatuses = meta.outreach_statuses ?? {};
   renderTabs();
   if (!first) return;
 
@@ -188,6 +189,34 @@ function websiteCell(lead) {
 
 const metaLine = (lead) => `${catLabel(lead.category)} · ${lead.city}`;
 
+// --- Instagram и холодная рассылка (её шлёт внешний агент, см. /api/outreach) ---
+
+const igHandle = (url) => url.replace(/\/+$/, "").split("/").pop();
+const outreachBadge = (status) =>
+  el("span", { class: `badge ob-${status}` }, state.outreachStatuses[status] ?? status);
+
+function igLine(lead) {
+  if (!lead.instagram) return null;
+  return el(
+    "div",
+    { class: "ig-line" },
+    el("a", { class: "ig", href: lead.instagram, target: "_blank", rel: "noopener",
+              onclick: (e) => e.stopPropagation() }, `@${igHandle(lead.instagram)}`),
+    lead.outreach_status ? outreachBadge(lead.outreach_status) : null,
+  );
+}
+
+function outreachField(o) {
+  const when = o.sent_at ?? o.claimed_at;
+  const lines = [
+    el("div", {}, outreachBadge(o.status), when ? el("span", { class: "muted" }, ` ${fmtDate(when)}`) : null),
+  ];
+  if (o.message) lines.push(el("p", { class: "ob-text" }, "→ ", o.message));
+  if (o.reply) lines.push(el("p", { class: "ob-text" }, "← ", o.reply));
+  if (o.error) lines.push(el("p", { class: "ob-text muted" }, o.error));
+  return lines;
+}
+
 // Первая буква названия без кавычек/цифр — для «аватарки»
 const initial = (name) => (name.match(/\p{L}/u)?.[0] ?? "•").toUpperCase();
 
@@ -208,6 +237,7 @@ function renderRow(lead) {
           { style: "min-width:0" },
           el("div", { class: "lead-name", title: lead.name }, lead.name),
           el("div", { class: "lead-meta" }, metaLine(lead)),
+          igLine(lead),
           // На узком экране колонки «Телефон» нет — номер под названием
           lead.phone
             ? el("a", { class: "phone phone-m", href: `tel:${lead.phone}`, onclick: stop }, lead.phone)
@@ -298,6 +328,9 @@ async function openCard(id) {
   if (!lead.website) {
     const [label] = WEBSITE_LABELS[lead.website_status] ?? WEBSITE_LABELS.null;
     fields.push(el("dt", {}, "Сайт"), el("dd", {}, label));
+  }
+  if (lead.outreach) {
+    fields.push(el("dt", {}, "Розсилка IG"), el("dd", {}, ...outreachField(lead.outreach)));
   }
   $("card-fields").replaceChildren(...fields);
 
