@@ -1,6 +1,7 @@
 """Тесты на bizparser.extract: телефоны, email, соцсети, JSON-LD."""
 from __future__ import annotations
 
+import pytest
 from selectolax.parser import HTMLParser
 
 from bizparser.extract import (
@@ -9,6 +10,7 @@ from bizparser.extract import (
     find_json_ld_contacts,
     find_phones,
     find_socials,
+    normalize_instagram,
     normalize_phone,
     tel_links,
     visible_text,
@@ -117,6 +119,44 @@ def test_find_socials_matches_instagram_and_strips_query():
     tree = HTMLParser(html)
     socials = find_socials(tree, "https://mysalon.ua")
     assert socials["instagram"] == "https://instagram.com/mysalon"
+
+
+def test_find_socials_skips_instagram_reel_and_takes_profile():
+    html = (
+        '<a href="https://www.instagram.com/reel/DDHdlVsN1on/">Рілс</a>'
+        '<a href="https://www.instagram.com/Orly_Dent/?hl=ru">IG</a>'
+    )
+    tree = HTMLParser(html)
+    assert find_socials(tree, "https://orly.ua")["instagram"] == "https://instagram.com/orly_dent"
+
+
+def test_find_socials_ignores_web_studio_credit():
+    html = (
+        '<a href="https://instagram.com/mysalon">IG</a>'
+        '<p>Розроблено <a href="https://facebook.com/webstudio">WebStudio</a></p>'
+    )
+    tree = HTMLParser(html)
+    assert find_socials(tree, "https://mysalon.ua") == {"instagram": "https://instagram.com/mysalon"}
+
+
+def test_find_socials_viber_keeps_number():
+    html = '<a href="viber://chat?number=%2B380671234567">Viber</a>'
+    tree = HTMLParser(html)
+    assert "number=" in find_socials(tree, "https://mysalon.ua")["viber"]
+
+
+@pytest.mark.parametrize("raw, expected", [
+    ("https://www.instagram.com/kraineva_stomatology/?hl=ru", "https://instagram.com/kraineva_stomatology"),
+    ("@vean_tattoo_kyiv_vdng", "https://instagram.com/vean_tattoo_kyiv_vdng"),
+    ("nota.bene.dental", "https://instagram.com/nota.bene.dental"),
+    ("instagram.com/Alliance_Tattoo", "https://instagram.com/alliance_tattoo"),
+    ("https://www.instagram.com/p/ABC123/", None),
+    ("https://www.instagram.com/explore/tags/dent/", None),
+    ("https://example.com/insta", None),
+    ("", None),
+])
+def test_normalize_instagram(raw, expected):
+    assert normalize_instagram(raw) == expected
 
 
 def test_find_socials_ignores_share_widget_junk():

@@ -7,6 +7,7 @@ from typing import Iterable, Iterator
 
 from . import chains, publicsector
 from .config import settings
+from .extract import normalize_instagram
 from .geocode import Place
 from .http import build_client, request
 
@@ -134,6 +135,8 @@ def parse_elements(
         socials = {}
         for network, keys in SOCIAL_KEYS.items():
             value = _first(tags, keys)
+            if network == "instagram":
+                value = normalize_instagram(value)
             if value:
                 socials[network] = value
 

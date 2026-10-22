@@ -13,7 +13,7 @@ authors = [{ name = "Vladyslav Suvorkin", email = "vladoksuvor@gmail.com" }]
 
 dependencies = [
     "httpx[http2]>=0.27",
-    "selectolax>=0.3.21",
+    "selectolax>=0.3.21,<1",
     "SQLAlchemy>=2.0.30",
     "typer>=0.12",
     "rich>=13.7",
